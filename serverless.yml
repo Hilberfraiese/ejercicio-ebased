@@ -1,0 +1,165 @@
+frameworkVersion: '3.26.0'
+service: hilberFraiese-ejercicioEbased
+
+plugins:
+- serverless-iam-roles-per-function
+
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: dev
+  region: us-east-1
+  iamRoleStatements:
+    - Effect: Allow
+      Action:        
+        - dynamodb:PutItem
+      Resource: "*"      
+  environment:
+    CLIENT_TABLE: !Ref ClientsDynamoDbTable
+    CLIENT_TOPIC: !Ref clientsTopic
+
+functions:
+  clientCreate:
+    handler: client/handler/index.create
+    memorySize: 128
+    description: Submit client information and starts credit card process.
+    events:
+      - http: 
+          path: clients
+          method: post
+    iamRoleStatements:
+      - Effect: "Allow"
+        Action:
+          - sns:Publish
+        Resource: "*"
+      - Effect: Allow
+        Action:        
+          - dynamodb:PutItem
+        Resource: "*"   
+  # clientCard:
+  #   handler: card/create.createCard
+  #   memorySize: 128
+  #   description: Receive client information and generate credit card number.
+  #   events:
+  #     - sqs:
+  #         arn:
+  #           Fn::GetAtt:
+  #             - cardQueue
+  #             - Arn
+  #   iamRoleStatements:     
+  #     - Effect: Allow
+  #       Action:        
+  #         - dynamodb:UpdateItem
+  #       Resource: "*"
+        
+  # clientGift:
+  #   handler: gift/create.createGift
+  #   memorySize: 128
+  #   description: Receive client information and generate a gift.
+  #   events:
+  #     - sqs:
+  #         arn:
+  #           Fn::GetAtt:
+  #             - giftQueue
+  #             - Arn
+  #   iamRoleStatements:     
+  #     - Effect: Allow
+  #       Action:        
+  #         - dynamodb:UpdateItem
+  #       Resource: "*"
+
+resources:
+  Resources:
+    ClientsDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: "dni"
+            AttributeType: "S"   
+        KeySchema:
+          -
+            AttributeName: "dni"
+            KeyType: "HASH"
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        StreamSpecification:
+          StreamViewType: "NEW_AND_OLD_IMAGES"
+        TableName: ${self:service}-${self:provider.stage}-CLIENT_TABLE
+
+    clientsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        DisplayName: clientTopic
+        TopicName: ${self:service}-${self:provider.stage}-clientsTopic
+
+    cardQueue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "${self:service}-${self:provider.stage}-cardQueue"
+
+    CardSubscription:
+      Type: 'AWS::SNS::Subscription'
+      Properties:
+        TopicArn: !Ref clientsTopic
+        Endpoint: !GetAtt 
+          - cardQueue
+          - Arn
+        Protocol: sqs
+        RawMessageDelivery: 'true'
+
+    snsTocardQueueSqsPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: "allow-sns-messages"
+              Effect: Allow
+              Principal: "*"
+              Resource: !GetAtt
+                - cardQueue
+                - Arn
+              Action: "SQS:SendMessage"
+              Condition:
+                ArnEquals:
+                  "aws:SourceArn": !Ref clientsTopic
+        Queues:
+          - Ref: cardQueue
+
+    giftQueue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "${self:service}-${self:provider.stage}-giftQueue"
+
+    GiftSubscription:
+      Type: 'AWS::SNS::Subscription'
+      Properties:
+        TopicArn: !Ref clientsTopic
+        Endpoint: !GetAtt 
+          - giftQueue
+          - Arn
+        Protocol: sqs
+        RawMessageDelivery: 'true'
+
+    snsToGiftQueueSqsPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: "allow-sns-messages"
+              Effect: Allow
+              Principal: "*"
+              Resource: !GetAtt
+                - giftQueue
+                - Arn
+              Action: "SQS:SendMessage"
+              Condition:
+                ArnEquals:
+                  "aws:SourceArn": !Ref clientsTopic
+        Queues:
+          - Ref: giftQueue
